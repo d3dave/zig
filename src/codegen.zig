@@ -1930,6 +1930,29 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
         /// Currently, the following ops are supported:
         /// ADD, SUB, XOR, OR, AND
         fn genX8664BinMath(self: *Self, inst: Air.Inst.Index, op_lhs: Air.Inst.Ref, op_rhs: Air.Inst.Ref) !MCValue {
+            var lhs = try self.resolveInst(op_lhs);
+            var rhs = try self.resolveInst(op_rhs);
+            const inst_ty = self.air.typeOfIndex(inst);
+            const air_tags = self.air.instructions.items(.tag);
+            var inst_tag = air_tags[inst];
+            switch (inst_tag) {
+                .sub, .subwrap => {
+                    if (lhs.isImmediate()) {
+                        // negate rhs, then add lhs:
+                        // imm - reg  =>  -reg + imm
+                        inst_tag = switch (inst_tag) {
+                            .sub => .add,
+                            .subwrap => .addwrap,
+                            else => unreachable
+                        };
+                        const neg_rhs = try self.genX8664Negate(inst_ty, rhs);
+                        rhs = lhs;
+                        lhs = neg_rhs;
+                    }
+                },
+                else => {}
+            }
+
             // We'll handle these ops in two steps.
             // 1) Prepare an output location (register or memory)
             //    This location will be the location of the operand that dies (if one exists)
@@ -1941,9 +1964,6 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
             // TODO: make this algorithm less bad
 
             try self.code.ensureCapacity(self.code.items.len + 8);
-
-            const lhs = try self.resolveInst(op_lhs);
-            const rhs = try self.resolveInst(op_rhs);
 
             // There are 2 operands, destination and source.
             // Either one, but not both, can be a memory operand.
@@ -2001,9 +2021,7 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
             }
 
             // Now for step 2, we perform the actual op
-            const inst_ty = self.air.typeOfIndex(inst);
-            const air_tags = self.air.instructions.items(.tag);
-            switch (air_tags[inst]) {
+            switch (inst_tag) {
                 // TODO: Generate wrapping and non-wrapping versions separately
                 .add, .addwrap => try self.genX8664BinMathCode(inst_ty, dst_mcv, src_mcv, 0, 0x00),
                 .bool_or, .bit_or => try self.genX8664BinMathCode(inst_ty, dst_mcv, src_mcv, 1, 0x08),
@@ -2016,6 +2034,23 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
             }
 
             return dst_mcv;
+        }
+
+        fn genX8664Negate(self: *Self, ty: Type, val: MCValue) !MCValue {
+            switch (val) {
+                .register => |reg| {
+                    const nbytes = ty.abiSize(self.target.*);
+                    const encoder = try X8664Encoder.init(self.code, 3);
+                    encoder.rex(.{
+                        .w = nbytes == 8,
+                        .r = reg.isExtended(),
+                    });
+                    encoder.opcode_1byte(if (nbytes == 1) 0xF6 else 0xF7);
+                    encoder.modRm_direct(3, reg.low_id());
+                    return val;
+                },
+                else => return self.fail("TODO: implement negate for {}", .{val})
+            }
         }
 
         /// Wrap over Instruction.encodeInto to translate errors
