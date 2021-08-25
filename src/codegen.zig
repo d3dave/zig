@@ -607,23 +607,25 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                         // Important to be after the possible self.code.items.len -= 5 above.
                         try self.dbgSetEpilogueBegin();
 
-                        try self.code.ensureCapacity(self.code.items.len + 9);
-                        // add rsp, x
-                        if (aligned_stack_end > math.maxInt(i8)) {
-                            // example: 48 81 c4 ff ff ff 7f  add    rsp,0x7fffffff
-                            self.code.appendSliceAssumeCapacity(&[_]u8{ 0x48, 0x81, 0xc4 });
-                            const x = @intCast(u32, aligned_stack_end);
-                            mem.writeIntLittle(u32, self.code.addManyAsArrayAssumeCapacity(4), x);
-                        } else if (aligned_stack_end != 0) {
-                            // example: 48 83 c4 7f           add    rsp,0x7f
-                            const x = @intCast(u8, aligned_stack_end);
-                            self.code.appendSliceAssumeCapacity(&[_]u8{ 0x48, 0x83, 0xc4, x });
-                        }
+                        if (self.ret_mcv != .unreach) {
+                            try self.code.ensureCapacity(self.code.items.len + 9);
+                            // add rsp, x
+                            if (aligned_stack_end > math.maxInt(i8)) {
+                                // example: 48 81 c4 ff ff ff 7f  add    rsp,0x7fffffff
+                                self.code.appendSliceAssumeCapacity(&[_]u8{ 0x48, 0x81, 0xc4 });
+                                const x = @intCast(u32, aligned_stack_end);
+                                mem.writeIntLittle(u32, self.code.addManyAsArrayAssumeCapacity(4), x);
+                            } else if (aligned_stack_end != 0) {
+                                // example: 48 83 c4 7f           add    rsp,0x7f
+                                const x = @intCast(u8, aligned_stack_end);
+                                self.code.appendSliceAssumeCapacity(&[_]u8{ 0x48, 0x83, 0xc4, x });
+                            }
 
-                        self.code.appendSliceAssumeCapacity(&[_]u8{
-                            0x5d, // pop rbp
-                            0xc3, // ret
-                        });
+                            self.code.appendSliceAssumeCapacity(&[_]u8{
+                                0x5d, // pop rbp
+                                0xc3, // ret
+                            });
+                        }
                     } else {
                         try self.dbgSetPrologueEnd();
                         try self.genBody(self.air.getMainBody());
